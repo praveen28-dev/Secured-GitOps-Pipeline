@@ -215,8 +215,9 @@ jobs:
           echo "  DEPLOYING VERIFIED IMAGE"
           echo "═══════════════════════════════════════════════════"
 
-          # Set the image tag for docker-compose
-          export IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          # Set the image tag for docker-compose (must be lowercase)
+          LOWER_IMAGE_NAME=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          export IMAGE_TAG="${{ env.REGISTRY }}/${LOWER_IMAGE_NAME}:latest"
 
           # Pull the verified image
           docker pull "$IMAGE_TAG"
