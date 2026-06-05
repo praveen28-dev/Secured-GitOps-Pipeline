@@ -129,7 +129,7 @@ jobs:
 
       # ── GATE 2: Trivy CVE Vulnerability Scan ──────────────
       - name: "🛡️ Gate 2: Trivy — CVE Vulnerability Scan"
-        uses: aquasecurity/trivy-action@0.20.0
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           format: "table"
@@ -144,7 +144,7 @@ jobs:
       # ── Upload SARIF to GitHub Security Tab ────────────────
       - name: Generate SARIF report
         if: always()
-        uses: aquasecurity/trivy-action@0.20.0
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           format: "sarif"
