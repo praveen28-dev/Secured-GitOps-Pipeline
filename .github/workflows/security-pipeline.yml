@@ -131,7 +131,7 @@ jobs:
       - name: "🛡️ Gate 2: Trivy — CVE Vulnerability Scan"
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          image-ref: ${{ steps.meta.outputs.tags }}
           format: "table"
           exit-code: "1"           # FAIL the pipeline on findings
           ignore-unfixed: true     # Only flag fixable vulnerabilities
@@ -146,7 +146,7 @@ jobs:
         if: always()
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          image-ref: ${{ steps.meta.outputs.tags }}
           format: "sarif"
           output: "trivy-results.sarif"
           ignore-unfixed: true
