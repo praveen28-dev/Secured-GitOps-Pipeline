@@ -238,7 +238,7 @@ jobs:
           echo "═══════════════════════════════════════════════════"
 
           # Test health endpoint
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/health || echo "000")
 
           if [ "$HTTP_STATUS" = "200" ]; then
             echo "✅ Health check passed (HTTP $HTTP_STATUS)"
@@ -250,7 +250,7 @@ jobs:
           fi
 
           # Test readiness
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ready || echo "000")
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/ready || echo "000")
           echo "Readiness probe: HTTP $HTTP_STATUS"
 
           # Verify non-root execution
