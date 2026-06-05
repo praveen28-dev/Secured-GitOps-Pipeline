@@ -149,7 +149,7 @@ jobs:
 
       # ── Upload SARIF to GitHub Security Tab ────────────────
       - name: Generate SARIF report
-        if: always()
+        if: always() && env.TRIVY_IMAGE_REF != ''
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.TRIVY_IMAGE_REF }}
