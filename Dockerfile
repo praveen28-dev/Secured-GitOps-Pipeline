@@ -41,7 +41,12 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 
 # ── Stage 2: Runtime ─────────────────────────────────────────
 # Minimal image with only what's needed to run the application.
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim-bookworm AS runtime
+
+# Upgrade OS packages to patch vulnerabilities
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    rm -rf /var/lib/apt/lists/*
 
 # ── Image Metadata (OCI standard labels) ────────────────────
 LABEL org.opencontainers.image.title="Container Security Falcon" \
