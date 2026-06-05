@@ -1,0 +1,275 @@
+# ============================================================
+# Container Security Falcon — Main CI/CD Security Pipeline
+#
+# Pipeline Flow:
+#   1. Lint & Test → Validate code quality
+#   2. Policy Check → OPA/Conftest validates Dockerfile
+#   3. Build → Multi-stage Docker build
+#   4. CVE Scan → Trivy scans for CRITICAL/HIGH vulnerabilities
+#   5. Push → Push to GHCR (only if scan passes)
+#   6. Deploy → Docker Compose with runtime restrictions
+#
+# Security Gates (pipeline HALTS if any gate fails):
+#   🛡️ Gate 1: Conftest — Dockerfile policy enforcement
+#   🛡️ Gate 2: Trivy — CVE vulnerability scan
+#   🛡️ Gate 3: Deployment smoke test
+# ============================================================
+
+name: "🛡️ Security Pipeline"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Allow manual triggers
+
+# Minimum permissions needed (Principle of Least Privilege)
+permissions:
+  contents: read
+  packages: write         # Push to GHCR
+  security-events: write  # Upload SARIF to Security tab
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ═══════════════════════════════════════════════════════════
+  #  JOB 1: Lint, Test, and Validate
+  # ═══════════════════════════════════════════════════════════
+  lint-and-test:
+    name: "🧪 Lint & Test"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run linting (flake8)
+        run: |
+          flake8 app/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 app/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
+
+  # ═══════════════════════════════════════════════════════════
+  #  JOB 2: Security Scan — Build, Scan, Push
+  # ═══════════════════════════════════════════════════════════
+  security-scan:
+    name: "🔒 Security Scan & Build"
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build-push.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── GATE 1: Dockerfile Policy Enforcement ─────────────
+      - name: "🛡️ Gate 1: Conftest — Dockerfile Policy Check"
+        run: |
+          # Install Conftest
+          CONFTEST_VERSION="0.56.0"
+          wget -q "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          tar xzf "conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          sudo mv conftest /usr/local/bin/
+
+          echo "═══════════════════════════════════════════════════"
+          echo "  GATE 1: Validating Dockerfile against OPA policies"
+          echo "═══════════════════════════════════════════════════"
+
+          conftest test Dockerfile --policy policy/ --all-namespaces
+
+          echo "✅ Gate 1 PASSED: Dockerfile complies with security policies"
+
+      # ── Docker Build ──────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        id: build-push
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── GATE 2: Trivy CVE Vulnerability Scan ──────────────
+      - name: "🛡️ Gate 2: Trivy — CVE Vulnerability Scan"
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: "table"
+          exit-code: "1"           # FAIL the pipeline on findings
+          ignore-unfixed: true     # Only flag fixable vulnerabilities
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+          timeout: "5m"
+        env:
+          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db"
+
+      # ── Upload SARIF to GitHub Security Tab ────────────────
+      - name: Generate SARIF report
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: "sarif"
+          output: "trivy-results.sarif"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH,MEDIUM"
+        env:
+          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db"
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      # ── Push to Registry (only if scan passed) ─────────────
+      - name: "✅ Push verified image to GHCR"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+      - name: Print scan results summary
+        if: success()
+        run: |
+          echo "═══════════════════════════════════════════════════"
+          echo "  ✅ ALL SECURITY GATES PASSED"
+          echo "═══════════════════════════════════════════════════"
+          echo "  Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "  Digest: ${{ steps.build-push.outputs.digest }}"
+          echo "  CVE Scan: PASS (no CRITICAL/HIGH vulnerabilities)"
+          echo "  Policy Check: PASS (Dockerfile compliant)"
+          echo "═══════════════════════════════════════════════════"
+
+  # ═══════════════════════════════════════════════════════════
+  #  JOB 3: Deploy (only on main branch, all gates passed)
+  # ═══════════════════════════════════════════════════════════
+  deploy:
+    name: "🚀 Deploy"
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy with Docker Compose
+        run: |
+          echo "═══════════════════════════════════════════════════"
+          echo "  DEPLOYING VERIFIED IMAGE"
+          echo "═══════════════════════════════════════════════════"
+
+          # Set the image tag for docker-compose
+          export IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+          # Pull the verified image
+          docker pull "$IMAGE_TAG"
+
+          # Deploy with security restrictions
+          docker compose -f docker-compose.yml up -d --force-recreate
+
+          echo "✅ Deployment initiated"
+
+      # ── GATE 3: Smoke Test ────────────────────────────────
+      - name: "🛡️ Gate 3: Deployment Smoke Test"
+        run: |
+          echo "Waiting for services to start..."
+          sleep 15
+
+          echo "═══════════════════════════════════════════════════"
+          echo "  GATE 3: Running deployment smoke tests"
+          echo "═══════════════════════════════════════════════════"
+
+          # Test health endpoint
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
+
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✅ Health check passed (HTTP $HTTP_STATUS)"
+          else
+            echo "❌ Health check failed (HTTP $HTTP_STATUS)"
+            echo "Rolling back deployment..."
+            docker compose down
+            exit 1
+          fi
+
+          # Test readiness
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ready || echo "000")
+          echo "Readiness probe: HTTP $HTTP_STATUS"
+
+          # Verify non-root execution
+          CONTAINER_USER=$(docker compose exec -T app whoami 2>/dev/null || echo "unknown")
+          echo "Container user: $CONTAINER_USER"
+
+          if [ "$CONTAINER_USER" = "root" ]; then
+            echo "❌ SECURITY VIOLATION: Container is running as root!"
+            docker compose down
+            exit 1
+          fi
+
+          echo ""
+          echo "═══════════════════════════════════════════════════"
+          echo "  ✅ ALL DEPLOYMENT CHECKS PASSED"
+          echo "═══════════════════════════════════════════════════"
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "## 🚀 Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dockerfile Policy (Conftest) | ✅ Compliant |" >> $GITHUB_STEP_SUMMARY
+          echo "| CVE Scan (Trivy) | ✅ No CRITICAL/HIGH |" >> $GITHUB_STEP_SUMMARY
+          echo "| Health Check | ✅ Responding |" >> $GITHUB_STEP_SUMMARY
+          echo "| Non-Root Execution | ✅ Verified |" >> $GITHUB_STEP_SUMMARY

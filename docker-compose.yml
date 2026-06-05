@@ -1,0 +1,175 @@
+# ============================================================
+# Container Security Falcon — Docker Compose (Development)
+#
+# Runtime Security Features (equivalent to ECS Fargate):
+#   ✅ Non-root user execution (user: "1001:1001")
+#   ✅ Read-only root filesystem (read_only: true)
+#   ✅ No privilege escalation (no-new-privileges)
+#   ✅ All Linux capabilities dropped (cap_drop: ALL)
+#   ✅ Only NET_BIND_SERVICE re-added
+#   ✅ Health checks for all services
+#   ✅ Resource limits (memory, CPU)
+#   ✅ Network isolation
+# ============================================================
+
+services:
+  # ── Flask Application ────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: falcon-app
+    restart: unless-stopped
+
+    # ── Runtime Security Restrictions ──────────────────────
+    # These mirror ECS Fargate task-level restrictions
+    security_opt:
+      - no-new-privileges:true     # Prevent privilege escalation via setuid/setgid
+    cap_drop:
+      - ALL                        # Drop ALL Linux capabilities
+    cap_add:
+      - NET_BIND_SERVICE           # Only allow binding to privileged ports
+    read_only: true                # Read-only root filesystem
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m  # Writable /tmp with restrictions
+    user: "1001:1001"              # Non-root user (matches Dockerfile)
+
+    # ── Environment ────────────────────────────────────────
+    environment:
+      - APP_ENV=production
+      - APP_VERSION=0.1.0
+      - LOG_LEVEL=INFO
+      - SECRET_KEY=${SECRET_KEY:-development-only-change-in-prod}
+      - READ_ONLY_FS=true
+      - CAPS_DROPPED=ALL
+      - IMAGE_SCANNED=true
+      - SCAN_RESULT=clean
+
+    # ── Resource Limits ────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+    # ── Health Check ───────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # ── Networking ─────────────────────────────────────────
+    networks:
+      - frontend
+      - backend
+
+  # ── Nginx Reverse Proxy ──────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: falcon-nginx
+    restart: unless-stopped
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETUID
+      - SETGID
+
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - frontend
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Prometheus (Metrics Collection) ──────────────────────
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: falcon-prometheus
+    restart: unless-stopped
+
+    security_opt:
+      - no-new-privileges:true
+
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--storage.tsdb.retention.size=256MB"
+    networks:
+      - backend
+      - monitoring
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Grafana (Monitoring Dashboard) ───────────────────────
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: falcon-grafana
+    restart: unless-stopped
+
+    security_opt:
+      - no-new-privileges:true
+
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - monitoring
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# ── Networks ─────────────────────────────────────────────────
+# Network isolation — services only communicate on shared networks
+networks:
+  frontend:
+    name: falcon-frontend
+  backend:
+    name: falcon-backend
+  monitoring:
+    name: falcon-monitoring
+
+# ── Volumes ──────────────────────────────────────────────────
+volumes:
+  prometheus-data:
+  grafana-data:

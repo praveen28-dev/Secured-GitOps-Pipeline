@@ -1,0 +1,105 @@
+#cloud-config
+# ============================================================
+# Container Security Falcon — Cloud-Init Bootstrap Script
+#
+# Automatically configures a fresh Ubuntu ARM instance:
+#   1. System updates
+#   2. Docker installation
+#   3. Firewall configuration
+#   4. Docker Compose installation
+#   5. Application deployment
+# ============================================================
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - git
+  - ufw
+
+# ── Install Docker and Deploy ────────────────────────────────
+runcmd:
+  # Install Docker using the official convenience script
+  - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  - sh /tmp/get-docker.sh
+  - usermod -aG docker ubuntu
+  - systemctl enable docker
+  - systemctl start docker
+
+  # Install Docker Compose plugin
+  - apt-get install -y docker-compose-plugin
+
+  # Configure UFW firewall
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp    # SSH
+  - ufw allow 80/tcp    # HTTP
+  - ufw allow 443/tcp   # HTTPS
+  - ufw allow 3000/tcp  # Grafana
+  - ufw --force enable
+
+  # Create application directory
+  - mkdir -p /opt/falcon
+  - chown ubuntu:ubuntu /opt/falcon
+
+  # Clone the repository (replace with your repo URL)
+  - |
+    su - ubuntu -c '
+      cd /opt/falcon
+      git clone https://github.com/YOUR_USER/container-security-falcon.git . || true
+      
+      # Generate a secure secret key
+      SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+      echo "SECRET_KEY=$SECRET_KEY" > .env
+      echo "GRAFANA_PASSWORD=$(python3 -c \"import secrets; print(secrets.token_hex(16))\")" >> .env
+      
+      # Deploy with Docker Compose
+      docker compose up -d --build
+    '
+
+# ── System Hardening ─────────────────────────────────────────
+write_files:
+  - path: /etc/sysctl.d/99-security.conf
+    content: |
+      # Disable IP forwarding (not a router)
+      net.ipv4.ip_forward = 0
+      
+      # Ignore ICMP redirects
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      
+      # Ignore broadcast pings
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+      
+      # Enable SYN flood protection
+      net.ipv4.tcp_syncookies = 1
+    permissions: "0644"
+
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        },
+        "live-restore": true,
+        "userns-remap": "default",
+        "no-new-privileges": true
+      }
+    permissions: "0644"
+
+final_message: |
+  ╔══════════════════════════════════════════════════════════╗
+  ║  Container Security Falcon — Server Ready!               ║
+  ║                                                          ║
+  ║  Application: http://PUBLIC_IP                           ║
+  ║  Grafana:     http://PUBLIC_IP:3000                      ║
+  ║                                                          ║
+  ║  SSH: ssh ubuntu@PUBLIC_IP                               ║
+  ╚══════════════════════════════════════════════════════════╝

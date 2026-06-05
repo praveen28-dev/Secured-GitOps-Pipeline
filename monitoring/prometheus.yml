@@ -1,0 +1,36 @@
+# ============================================================
+# Container Security Falcon — Prometheus Configuration
+#
+# Scrapes metrics from the Flask application and itself.
+# ============================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+  external_labels:
+    project: "container-security-falcon"
+    environment: "development"
+
+# ── Scrape Targets ────────────────────────────────────────────
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Flask application metrics
+  - job_name: "falcon-app"
+    metrics_path: "/metrics"
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["app:8000"]
+        labels:
+          service: "container-security-falcon"
+          tier: "application"
+
+  # Nginx metrics (requires nginx-exporter in production)
+  # - job_name: "nginx"
+  #   static_configs:
+  #     - targets: ["nginx-exporter:9113"]

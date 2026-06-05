@@ -1,0 +1,67 @@
+# ============================================================
+# Container Security Falcon — .gitignore
+# Prevents secrets, build artifacts, and IDE files from leaking
+# ============================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ---------- Environment & Secrets ----------
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+credentials/
+
+# ---------- Docker ----------
+docker-compose.override.yml
+
+# ---------- Terraform ----------
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# ---------- IDE ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---------- Testing ----------
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# ---------- Logs ----------
+*.log
+logs/
