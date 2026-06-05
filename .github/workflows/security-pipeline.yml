@@ -128,10 +128,16 @@ jobs:
           cache-to: type=gha,mode=max
 
       # ── GATE 2: Trivy CVE Vulnerability Scan ──────────────
+      - name: Extract Primary Image Tag for Trivy
+        run: |
+          # Extract the first tag from the multiline output of docker/metadata-action
+          PRIMARY_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
+          echo "TRIVY_IMAGE_REF=$PRIMARY_TAG" >> $GITHUB_ENV
+
       - name: "🛡️ Gate 2: Trivy — CVE Vulnerability Scan"
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ steps.meta.outputs.tags }}
+          image-ref: ${{ env.TRIVY_IMAGE_REF }}
           format: "table"
           exit-code: "1"           # FAIL the pipeline on findings
           ignore-unfixed: true     # Only flag fixable vulnerabilities
@@ -146,7 +152,7 @@ jobs:
         if: always()
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ steps.meta.outputs.tags }}
+          image-ref: ${{ env.TRIVY_IMAGE_REF }}
           format: "sarif"
           output: "trivy-results.sarif"
           ignore-unfixed: true
