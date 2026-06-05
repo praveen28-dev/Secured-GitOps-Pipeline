@@ -31,6 +31,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  TRIVY_IMAGE_REF: "" # Initialized here to satisfy IDE static analysis, populated dynamically later
 
 jobs:
   # ═══════════════════════════════════════════════════════════
